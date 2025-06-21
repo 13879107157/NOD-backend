@@ -88,14 +88,14 @@ const getUserInfo = async (req, res) => {
         }
 
         const user = await User.findByPk(userId, {
-            attributes: ['id', 'username', 'status'],
+            attributes: ['id', 'username', 'status','role'],
         });
 
         if (!user) {
             return res.status(404).json(errorResponse('用户不存在'));
         }
 
-        res.status(200).json(successResponse('获取用户信息成功', user[0]));
+        res.status(200).json(successResponse('获取用户信息成功', user));
     } catch (error) {
         console.error('获取用户信息错误:', error);
         res.status(500).json(errorResponse('获取用户信息失败，请稍后再试'));

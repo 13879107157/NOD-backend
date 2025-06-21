@@ -1,36 +1,75 @@
 const fs = require('fs');
 const path = require('path');
 const xlsx = require('xlsx');
-const axios = require('axios');
+const PlatformGroup = require('../models/platformGroup.model');
+const Platform = require('../models/platform.model');
+const PlatformType = require('../models/platformType.model');
 const { successResponse, errorResponse } = require('../utils/response');
 
 // Excel 日期转换函数
-function excelDateToJSDate(excelDate) {
+function excelDateToJSDate (excelDate) {
     if (typeof excelDate !== 'number') return excelDate;
-    
+
     // Excel 日期是从 1900 年 1 月 1 日开始的天数（实际上有个闰年的 bug，但我们忽略它）
     const date = new Date((excelDate - 25569) * 86400 * 1000);
-    
+
     // 格式化日期为 YYYY-MM-DD 格式
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
-    
+
     return `${year}-${month}-${day}`;
 }
 
-// 创建 axios 实例，用于 API 请求
-const apiClient = axios.create({
-    baseURL: `${process.env.API_BASE_URL || 'http://localhost:8181'}`,
-    timeout: 10000,
-    headers: {
-        'Content-Type': 'application/json'
-    }
+// 定义公共的查询配置
+const PLATFORM_INCLUDE_CONFIG = {
+    model: Platform,
+    as: 'platforms',
+    attributes: ['id', 'name', 'description', 'match_rule', 'order', 'exclusion_rule'],
+    include: [
+        {
+            model: PlatformType,
+            as: 'platformType',
+            attributes: ['id', 'name', 'description']
+        }
+    ]
+};
+
+// 转换平台数据格式
+const formatPlatform = (platform) => {
+    const {
+        id,
+        name,
+        order,
+        match_rule,
+        exclusion_rule,
+        platformType: { name: platformTypeName, id: platformTypeId }
+    } = platform;
+
+    return {
+        platformId: id,
+        platformName: name,
+        order,
+        matchRule: match_rule,
+        exclusionRule: exclusion_rule,
+        platformTypeName,
+        platformTypeId,
+        matchedData: [],
+        matchCount: 0
+    };
+};
+
+// 转换平台组数据格式
+const formatPlatformGroup = (group) => ({
+    platformGroupName: group.name,
+    platformGroupId: group.id,
+    order: group.order,
+    matchCount: 0, // 新增：用于统计平台组下所有平台的匹配数量
+    platformGroupChildren: group.platforms.map(formatPlatform)
 });
 
 // 处理 Excel 匹配请求
 const processExcelMatching = async (req, res) => {
-    console.log("aaaaaaaaaaaaaaaaaaaaaaa",req.body);
     try {
         // 记录文件信息
         console.log('控制器接收的文件:', req.file);
@@ -81,40 +120,45 @@ const processExcelMatching = async (req, res) => {
 
         console.log('解析后的 columnsToInclude:', columnsToIncludeArray);
 
-        // 获取平台结构数据 - 带认证
+        // 直接查询数据库获取平台结构数据
         try {
-            // 从请求头获取认证令牌
-            const authToken = req.headers.authorization;
-
-            // 设置认证头
-            if (authToken) {
-                apiClient.defaults.headers.common['Authorization'] = authToken;
-            } else {
-                console.warn('未找到认证令牌');
-                return res.status(401).json(errorResponse('认证失败，请重新登录'));
-            }
-
-            // 调用 API 获取平台结构
-            const platformStructureResponse = await apiClient.get('/api/platform-structure');
-
-            if (!platformStructureResponse.data.success) {
-                return cleanupAndRespond(500, '无法获取平台结构数据');
-            }
-
-            const platformStructure = platformStructureResponse.data.data;
-
-            // 按 order 排序顶级平台结构
-            const sortedStructure = [...platformStructure].sort((a, b) => {
-                const orderA = a.order !== null ? a.order : Infinity;
-                const orderB = b.order !== null ? b.order : Infinity;
-                return orderA - orderB;
+            const platformGroups = await PlatformGroup.findAll({
+                attributes: ['id', 'name', 'description', 'status', 'order'],
+                include: [PLATFORM_INCLUDE_CONFIG]
             });
+
+            const platformStructure = platformGroups.map(formatPlatformGroup);
+
+            // 新增：创建“其他”组
+            const otherGroup = {
+                platformGroupName: '其他',
+                platformGroupId: null,
+                order: Infinity,
+                matchCount: 0,
+                platformGroupChildren: [
+                    {
+                        platformId: null,
+                        platformName: '其他',
+                        order: Infinity,
+                        matchRule: [],
+                        exclusionRule: [],
+                        platformTypeName: '其他',
+                        platformTypeId: null,
+                        matchedData: [],
+                        matchCount: 0
+                    }
+                ]
+            };
+
+            platformStructure.push(otherGroup);
 
             // 读取 Excel 文件
             try {
                 const workbook = xlsx.readFile(req.file.path);
                 const worksheet = workbook.Sheets[workbook.SheetNames[0]];
                 const excelData = xlsx.utils.sheet_to_json(worksheet);
+                // 获取解析到的 Excel 列名
+                const excelColumns = Object.keys(excelData[0] || {});
 
                 // 检查 URL 列是否存在
                 if (!excelData[0] || !excelData[0][urlColumn]) {
@@ -127,41 +171,6 @@ const processExcelMatching = async (req, res) => {
                     globalStatistics[column] = {
                         '其他': 0
                     };
-                });
-
-                // 初始化结果结构，同时为每个平台和组添加 statistics 对象
-                const result = JSON.parse(JSON.stringify(sortedStructure));
-                
-                // 初始化组级统计
-                result.forEach(group => {
-                    // 按 order 排序平台组内的平台
-                    if (group.platformGroupChildren) {
-                        group.platformGroupChildren = [...group.platformGroupChildren].sort((a, b) => {
-                            const orderA = a.order !== null ? a.order : Infinity;
-                            const orderB = b.order !== null ? b.order : Infinity;
-                            return orderA - orderB;
-                        });
-                    }
-                    
-                    group.statistics = {}; // 组级统计
-                    columnsToIncludeArray.forEach(column => {
-                        group.statistics[column] = {
-                            '其他': 0
-                        };
-                    });
-                    
-                    group.platformGroupChildren?.forEach(platform => {
-                        platform.matchedData = [];
-                        platform.matchCount = 0;
-                        platform.statistics = {}; // 平台级统计
-                        
-                        // 初始化平台统计对象的列
-                        columnsToIncludeArray.forEach(column => {
-                            platform.statistics[column] = {
-                                '其他': 0
-                            };
-                        });
-                    });
                 });
 
                 // 遍历 Excel 数据并匹配
@@ -180,9 +189,7 @@ const processExcelMatching = async (req, res) => {
                     let matched = false;
 
                     // 遍历平台组和平台
-                    for (const group of result) {
-                        if (!group.platformGroupChildren) continue;
-                        
+                    for (const group of platformStructure) {
                         for (const platform of group.platformGroupChildren) {
                             // 解析匹配规则
                             let matchRules = [];
@@ -215,30 +222,43 @@ const processExcelMatching = async (req, res) => {
                             // 检查 URL 是否匹配任何规则
                             if (matchRules.some(rule => url.includes(rule))) {
                                 // 保存原始行的所有数据
-                                platform.matchedData.push({...row});
+                                platform.matchedData.push({ ...row });
                                 platform.matchCount++;
+                                group.matchCount++; // 新增：更新平台组的匹配数量
                                 matched = true;
-                                
+
                                 // 更新当前平台的统计数据
                                 columnsToIncludeArray.forEach(col => {
-                                    const value = row[col] !== undefined && row[col] !== '' 
-                                        ? row[col] 
+                                    const value = row[col] !== undefined && row[col] !== ''
+                                        ? row[col]
                                         : '其他'; // 处理不存在或为空的情况
-                                    
+
                                     // 更新平台统计
+                                    if (!platform.statistics) {
+                                        platform.statistics = {};
+                                    }
+                                    if (!platform.statistics[col]) {
+                                        platform.statistics[col] = {};
+                                    }
                                     if (!platform.statistics[col][value]) {
                                         platform.statistics[col][value] = 1;
                                     } else {
                                         platform.statistics[col][value]++;
                                     }
-                                    
+
                                     // 更新组统计
+                                    if (!group.statistics) {
+                                        group.statistics = {};
+                                    }
+                                    if (!group.statistics[col]) {
+                                        group.statistics[col] = {};
+                                    }
                                     if (!group.statistics[col][value]) {
                                         group.statistics[col][value] = 1;
                                     } else {
                                         group.statistics[col][value]++;
                                     }
-                                    
+
                                     // 更新全局统计
                                     if (!globalStatistics[col][value]) {
                                         globalStatistics[col][value] = 1;
@@ -246,36 +266,72 @@ const processExcelMatching = async (req, res) => {
                                         globalStatistics[col][value]++;
                                     }
                                 });
-                                
+
                                 break;
                             }
                         }
 
                         if (matched) break;
                     }
+
+                    // 如果没有匹配到任何平台，将数据放入“其他”组
+                    if (!matched) {
+                        const otherPlatform = otherGroup.platformGroupChildren[0];
+                        otherPlatform.matchedData.push({ ...row });
+                        otherPlatform.matchCount++;
+                        otherGroup.matchCount++;
+
+                        columnsToIncludeArray.forEach(col => {
+                            const value = row[col] !== undefined && row[col] !== ''
+                                ? row[col]
+                                : '其他';
+
+                            if (!otherPlatform.statistics) {
+                                otherPlatform.statistics = {};
+                            }
+                            if (!otherPlatform.statistics[col]) {
+                                otherPlatform.statistics[col] = {};
+                            }
+                            if (!otherPlatform.statistics[col][value]) {
+                                otherPlatform.statistics[col][value] = 1;
+                            } else {
+                                otherPlatform.statistics[col][value]++;
+                            }
+
+                            if (!otherGroup.statistics) {
+                                otherGroup.statistics = {};
+                            }
+                            if (!otherGroup.statistics[col]) {
+                                otherGroup.statistics[col] = {};
+                            }
+                            if (!otherGroup.statistics[col][value]) {
+                                otherGroup.statistics[col][value] = 1;
+                            } else {
+                                otherGroup.statistics[col][value]++;
+                            }
+
+                            if (!globalStatistics[col][value]) {
+                                globalStatistics[col][value] = 1;
+                            } else {
+                                globalStatistics[col][value]++;
+                            }
+                        });
+                    }
                 });
 
-                // 返回结果，添加全局统计
+                // 返回结果，添加全局统计和解析到的 Excel 列名
                 return cleanupAndRespond(200, 'Excel 数据匹配成功', {
                     totalRows: excelData.length,
-                    matchedRows: result.reduce((sum, group) =>
-                        sum + (group.platformGroupChildren?.reduce((platformSum, platform) =>
-                            platformSum + platform.matchCount, 0) || 0), 0),
-                    platformStructure: result,
-                    statistics: globalStatistics // 新增全局统计
+                    platformStructure: platformStructure,
+                    globalStatistics,
+                    excelColumns
                 });
             } catch (readError) {
                 console.error('读取 Excel 文件错误:', readError);
                 return cleanupAndRespond(500, '无法读取上传的 Excel 文件');
             }
-        } catch (apiError) {
-            console.error('获取平台结构 API 错误:', apiError);
-
-            // 处理认证错误
-            if (apiError.response && apiError.response.status === 401) {
-                return cleanupAndRespond(401, '认证失败，请重新登录');
-            }
-
+        } catch (dbError) {
+            console.error('查询数据库获取平台结构错误:', dbError);
             return cleanupAndRespond(500, '获取平台结构数据失败');
         }
     } catch (error) {
@@ -284,7 +340,7 @@ const processExcelMatching = async (req, res) => {
     }
 
     // 清理临时文件并响应
-    function cleanupAndRespond(statusCode, message, data = null) {
+    function cleanupAndRespond (statusCode, message, data = null) {
         // 确保删除临时文件
         if (req.file && fs.existsSync(req.file.path)) {
             try {
