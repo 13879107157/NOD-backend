@@ -156,9 +156,40 @@ const processExcelMatching = async (req, res) => {
             try {
                 const workbook = xlsx.readFile(req.file.path);
                 const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-                const excelData = xlsx.utils.sheet_to_json(worksheet);
-                // 获取解析到的 Excel 列名
-                const excelColumns = Object.keys(excelData[0] || {});
+
+                // 获取工作表范围
+                const range = xlsx.utils.decode_range(worksheet['!ref'] || 'A1:A1');
+                const maxCol = range.e.c; // 获取最大列索引
+
+                // 获取表头行数据（假设表头在第一行）
+                const headerRow = 1; // Excel行号从1开始
+                const headers = [];
+
+                for (let col = 0; col <= maxCol; col++) {
+                    const cellAddress = xlsx.utils.encode_cell({ r: headerRow - 1, c: col }); // 转换为A1表示法
+                    const cell = worksheet[cellAddress];
+
+                    // 获取表头值，如果单元格为空则默认为空字符串
+                    const headerValue = cell ? cell.v : '';
+                    headers.push(headerValue);
+                }
+
+                // 转换工作表数据为JSON，保留空列
+                const excelData = xlsx.utils.sheet_to_json(worksheet, {
+                    header: headers, // 使用提取的表头
+                    defval: '-',    // 将空单元格设置为null而不是忽略
+                });
+
+                // 从数据中移除表头行（第一行）
+                if (excelData.length > 0) {
+                    excelData.shift(); // 移除第一行（表头）
+                }
+
+                console.log(excelData);
+
+                // 获取所有列名（包括空列）
+                const excelColumns = headers;
+                console.log(excelColumns);
 
                 // 检查 URL 列是否存在
                 if (!excelData[0] || !excelData[0][urlColumn]) {
