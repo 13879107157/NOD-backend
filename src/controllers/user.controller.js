@@ -1,7 +1,7 @@
 const User = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const jwtConfig = require('../config/jwt.config');
-const bcrypt = require('bcrypt');
+const bcrypt = require('bcryptjs');
 const { successResponse, errorResponse } = require('../utils/response');
 
 // 用户注册
