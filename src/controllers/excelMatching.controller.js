@@ -214,13 +214,17 @@ const processExcelMatching = async (req, res) => {
                 });
 
                 // 遍历 Excel 数据并匹配
+                // 处理 Excel 数据匹配的核心部分
                 excelData.forEach(row => {
                     const url = row[urlColumn];
-                    if (!url) return;
+
+                    // 新增：处理空值和类型转换
+                    if (!url) return; // 跳过空URL
+                    const urlString = String(url).trim(); // 转换为字符串并去空格
+                    if (!urlString) return; // 处理转换后仍为空的情况
 
                     // 处理可能的日期列
                     Object.keys(row).forEach(key => {
-                        // 尝试识别可能的日期列（这里假设列名包含"日期"或"时间"）
                         if ((key.includes('日期') || key.includes('时间')) && typeof row[key] === 'number') {
                             row[key] = excelDateToJSDate(row[key]);
                         }
@@ -254,13 +258,19 @@ const processExcelMatching = async (req, res) => {
                                 }
                             }
 
-                            // 检查是否被排除规则匹配
-                            if (exclusionRules.some(rule => url.includes(rule))) {
+                            // 新增：安全检查排除规则匹配
+                            if (exclusionRules.some(rule => {
+                                if (!rule || typeof rule !== 'string') return false;
+                                return urlString.includes(rule);
+                            })) {
                                 continue; // 跳过当前平台
                             }
 
-                            // 检查 URL 是否匹配任何规则
-                            if (matchRules.some(rule => url.includes(rule))) {
+                            // 新增：安全检查匹配规则匹配
+                            if (matchRules.some(rule => {
+                                if (!rule || typeof rule !== 'string') return false;
+                                return urlString.includes(rule);
+                            })) {
                                 // 保存原始行的所有数据
                                 platform.matchedData.push({ ...row });
                                 platform.matchCount++;
@@ -358,7 +368,6 @@ const processExcelMatching = async (req, res) => {
                         });
                     }
                 });
-
                 // 返回结果，添加全局统计和解析到的 Excel 列名
                 return cleanupAndRespond(200, 'Excel 数据匹配成功', {
                     totalRows: excelData.length,

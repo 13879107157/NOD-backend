@@ -9,6 +9,7 @@ const sequelize = new Sequelize(
   process.env.DB_PASSWORD,
   {
     host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
     dialect: 'mysql',
     timezone: '+08:00', // 设置为中国时区
     logging: false, // 关闭日志输出，生产环境可设置为true以便调试
