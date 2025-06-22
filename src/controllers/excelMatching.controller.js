@@ -69,6 +69,7 @@ const formatPlatformGroup = (group) => ({
 });
 
 // 处理 Excel 匹配请求
+// 处理 Excel 匹配请求
 const processExcelMatching = async (req, res) => {
     try {
         // 记录文件信息
@@ -127,18 +128,26 @@ const processExcelMatching = async (req, res) => {
                 include: [PLATFORM_INCLUDE_CONFIG]
             });
 
-            const platformStructure = platformGroups.map(formatPlatformGroup);
+            // 对平台组按 order 升序排序
+            const sortedPlatformGroups = platformGroups.sort((a, b) => a.order - b.order);
+
+            const platformStructure = sortedPlatformGroups.map(formatPlatformGroup);
+
+            // 对每个平台组下的平台按 order 升序排序
+            platformStructure.forEach(group => {
+                group.platformGroupChildren = group.platformGroupChildren.sort((a, b) => a.order - b.order);
+            });
 
             // 新增：创建“其他”组
             const otherGroup = {
-                platformGroupName: '其他',
+                platformGroupName: '未匹配数据',
                 platformGroupId: null,
                 order: Infinity,
                 matchCount: 0,
                 platformGroupChildren: [
                     {
                         platformId: null,
-                        platformName: '其他',
+                        platformName: '未匹配数据',
                         order: Infinity,
                         matchRule: [],
                         exclusionRule: [],

@@ -18,7 +18,9 @@ const createPlatformGroup = async (req, res) => {
 // 获取所有平台组
 const getAllPlatformGroups = async (req, res) => {
     try {
-        const platformGroups = await PlatformGroup.findAll();
+        const platformGroups = await PlatformGroup.findAll({
+            order: [['order', 'ASC']]
+        });
 
         res.status(200).json(successResponse('获取平台组列表成功', platformGroups));
     } catch (error) {
