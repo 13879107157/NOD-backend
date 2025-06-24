@@ -28,7 +28,9 @@ const createPlatform = async (req, res) => {
 // 获取所有平台
 const getAllPlatforms = async (req, res) => {
     try {
-        const platforms = await Platform.findAll();
+        const platforms = await Platform.findAll({
+            order: [['order', 'ASC']]
+        });
 
         res.status(200).json(successResponse('获取平台列表成功', platforms));
     } catch (error) {
